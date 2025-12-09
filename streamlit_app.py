@@ -1,36 +1,35 @@
 import streamlit as st
-import socket # <--- Necesario para el parche
+import socket  # <--- Necesario para el arreglo
+import pandas as pd
+from sqlalchemy import text
 
-# --- 🛠️ PARCHE DE COMPATIBILIDAD IPV4 (IMPORTANTE) ---
-# Esto fuerza a Python a usar la conexión clásica para evitar el error "Cannot assign address"
-# Si tu internet bloquea IPv6, esto lo soluciona.
+# --- 🚑 PARCHE DE EMERGENCIA PARA RED (IPv4) ---
+# Esto evita que tu internet intente usar IPv6 y falle.
+# Fuerza la conexión clásica que siempre funciona.
 original_getaddrinfo = socket.getaddrinfo
 def new_getaddrinfo(*args, **kwargs):
     responses = original_getaddrinfo(*args, **kwargs)
     return [response for response in responses if response[0] == socket.AF_INET]
 socket.getaddrinfo = new_getaddrinfo
-# ------------------------------------------------------
+# ------------------------------------------------
 
-import pandas as pd
-from sqlalchemy import text
-
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Sistema Procuraduria Cloud", page_icon="☁️", layout="wide")
 
-# --- CONEXIÓN ---
-# Busca automáticamente en .streamlit/secrets.toml
+# --- CONEXIÓN A SUPABASE ---
 try:
-    conn = st.connection("supabase", type="sql")
+    # ttl=0 asegura que no guarde caché vieja si hay errores
+    conn = st.connection("supabase", type="sql", ttl=0)
 except Exception as e:
-    st.error(f"Error crítico conectando a la base de datos: {e}")
+    st.error(f"Error de conexión inicial: {e}")
     st.stop()
 
-# --- FUNCIONES ---
+# --- FUNCIONES DE BÚSQUEDA ---
 
 def buscar_legajos(legajo, anio, expediente, abogado, estado):
     filtros = []
     
-    # QUERY BASE (Todo en minúsculas, sin comillas)
+    # Consulta base limpia (asumiendo que ya pasaste todo a minúsculas)
     sql_base = """
     SELECT 
         legajo_nro as legajo, 
@@ -45,7 +44,7 @@ def buscar_legajos(legajo, anio, expediente, abogado, estado):
     WHERE 1=1
     """
     
-    # FILTROS DINÁMICOS
+    # Filtros dinámicos
     if legajo: 
         filtros.append(f"AND CAST(legajo_nro AS TEXT) = '{legajo.strip()}'")
     if anio: 
@@ -57,13 +56,13 @@ def buscar_legajos(legajo, anio, expediente, abogado, estado):
     if estado:
         filtros.append(f"AND estadolegajo_id ILIKE '%{estado.strip()}%'")
     
-    # Unimos todo
+    # Armar query final
     query_final = sql_base + " " + " ".join(filtros) + " ORDER BY legajo_año DESC LIMIT 50"
     
     try:
-        return conn.query(query_final, ttl=0)
+        return conn.query(query_final)
     except Exception as e:
-        st.error(f"Error en búsqueda: {e}")
+        st.error(f"Error buscando legajos: {e}")
         return pd.DataFrame()
 
 def obtener_movimientos(nro, anio):
@@ -75,14 +74,14 @@ def obtener_movimientos(nro, anio):
     ORDER BY fecha_mov DESC
     """
     try:
-        return conn.query(sql, ttl=0)
+        return conn.query(sql)
     except Exception as e:
-        st.error(f"Error en historial: {e}")
+        st.error(f"Error trayendo movimientos: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ GRÁFICA ---
-st.title("☁️ Sistema Procuraduría (Cloud)")
-st.caption("Conectado a Supabase 🟢 (Modo IPv4)")
+st.title("☁️ Sistema Procuraduría (En Nube)")
+st.caption("Conectado a Supabase 🟢 (Modo Seguro IPv4)")
 
 tab1, tab2 = st.tabs(["🔍 Búsqueda General", "📂 Expediente Detallado"])
 
@@ -99,7 +98,7 @@ with tab1:
     
     if st.button("Buscar Expedientes", type="primary"):
         if f_leg or f_ani or f_abo or f_exp or f_est:
-            with st.spinner('Consultando nube...'):
+            with st.spinner('Consultando base de datos...'):
                 df = buscar_legajos(f_leg, f_ani, f_exp, f_abo, f_est)
             
             if not df.empty:
@@ -108,7 +107,7 @@ with tab1:
             else:
                 st.warning("No se encontraron resultados.")
         else:
-            st.info("Escribe al menos un filtro para buscar.")
+            st.info("Ingresa al menos un dato para buscar.")
 
 # --- PESTAÑA 2: DETALLE ---
 with tab2:
@@ -117,14 +116,15 @@ with tab2:
     a_ver = col_b.text_input("Del Año", key="v_ani")
     
     with col_btn:
-        st.write("")
-        st.write("")
+        st.write("") # Espacio
+        st.write("") # Espacio
         btn_ver = st.button("Cargar Historial", type="primary")
     
     if btn_ver and l_ver and a_ver:
+        # Consulta de cabecera
         q_cab = f"SELECT * FROM legajos WHERE CAST(legajo_nro AS TEXT)='{l_ver}' AND CAST(legajo_año AS TEXT)='{a_ver}' LIMIT 1"
         try:
-            df_cab = conn.query(q_cab, ttl=0)
+            df_cab = conn.query(q_cab)
             
             if not df_cab.empty:
                 row = df_cab.iloc[0]
@@ -133,30 +133,35 @@ with tab2:
                 st.subheader(f"📁 Expediente {l_ver}-{a_ver}")
                 
                 c_info1, c_info2 = st.columns(2)
-                c_info1.info(f"**Materia:** {row['nombre_materia']}")
-                c_info2.warning(f"**Estado:** {row['estadolegajo_id']}")
+                # Usamos .get() para evitar error si la columna no existe exacta
+                mat = row.get('nombre_materia', 'Sin dato')
+                est = row.get('estadolegajo_id', 'Sin dato')
                 
-                st.write(f"**Demandante:** {row['demandante']}")
-                st.write(f"**Inculpado:** {row['inculpado']}")
-                st.write(f"**Abogado Responsable:** {row['nombre_abogado']}")
+                c_info1.info(f"**Materia:** {mat}")
+                c_info2.warning(f"**Estado:** {est}")
                 
-                with st.expander("Ver Resumen / Observaciones", expanded=True):
-                    st.write(row['estado_actual_resumen'])
+                st.write(f"**Demandante:** {row.get('demandante', '')}")
+                st.write(f"**Inculpado:** {row.get('inculpado', '')}")
+                st.write(f"**Abogado:** {row.get('nombre_abogado', '')}")
                 
-                st.markdown("### 📜 Historial de Movimientos")
+                with st.expander("Ver Resumen", expanded=True):
+                    st.write(row.get('estado_actual_resumen', ''))
+                
+                # Consulta de movimientos
+                st.markdown("### 📜 Historial")
                 df_mov = obtener_movimientos(l_ver, a_ver)
                 
                 if not df_mov.empty:
-                    # Intento de formateo de fecha seguro
+                    # Formato de fecha seguro
                     if 'fecha_mov' in df_mov.columns:
                         try:
                             df_mov['fecha_mov'] = pd.to_datetime(df_mov['fecha_mov']).dt.strftime('%d/%m/%Y')
-                        except:
-                            pass 
+                        except: pass
+                    
                     st.dataframe(df_mov, use_container_width=True, hide_index=True)
                 else:
-                    st.info("Este legajo no registra movimientos.")
+                    st.info("Sin movimientos registrados.")
             else:
-                st.error(f"El Legajo {l_ver}-{a_ver} no existe.")
+                st.error(f"No se encontró el Legajo {l_ver}-{a_ver}")
         except Exception as e:
-            st.error(f"Error consultando base de datos: {e}")
+            st.error(f"Error consultando detalle: {e}")
