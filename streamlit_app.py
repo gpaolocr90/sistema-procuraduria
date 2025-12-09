@@ -76,7 +76,7 @@ def buscar_legajos(legajo, anio, expediente, abogado, estado):
     if abogado: filtros.append(f"AND nombre_abogado ILIKE '%{abogado.strip()}%'")
     if estado: filtros.append(f"AND estadolegajo_id ILIKE '%{estado.strip()}%'")
     
-    query_final = sql_base + " " + " ".join(filtros) + " ORDER BY legajo_año DESC, legajo_nro DESC LIMIT 50"
+    query_final = sql_base + " " + " ".join(filtros) + " ORDER BY legajo_año DESC"
     
     try:
         df = conn.query(query_final)
@@ -230,3 +230,4 @@ with tab2:
                 st.error("No existe ese legajo.")
         except Exception as e:
             st.error(f"Error: {e}")
+
